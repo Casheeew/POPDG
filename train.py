@@ -11,7 +11,7 @@ def train(opt):
     try:
         model = POPDG(opt.feature_type)
     except Exception as e:
-        logging.error("Failed to initialize the EDGE model: %s", e)
+        logging.error("Failed to initialize the POPDG model: %s", e)
         logging.error("Exception details:\n%s", traceback.format_exc())
         return  
 
