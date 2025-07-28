@@ -62,6 +62,7 @@ def extract_audio_features(file_path, skip_completed=True, dest_dir="baseline_fe
 def process_audio_directory(src_dir, dest_dir):
     """Process all audio files in the directory."""
     file_paths = sorted(Path(src_dir).glob("*"))
+    # print(file_paths)
     extract_features = partial(extract_audio_features, skip_completed=False, dest_dir=dest_dir)
     for file_path in tqdm(file_paths):
         feats, path = extract_features(file_path)

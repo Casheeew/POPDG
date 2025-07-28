@@ -156,9 +156,9 @@ class GaussianDiffusion(nn.Module):
             extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape)
         )
     
-    def model_predictions(self, x, cond, t, weight=None, clip_x_start = False):
+    def model_predictions(self, x, cond, t, control=None, weight=None, clip_x_start = False):
         weight = weight if weight is not None else self.guidance_weight
-        model_output, _ = self.model.guided_forward(x, cond, t, weight)
+        model_output, _ = self.model.guided_forward(x, cond, t, weight, control=control)
         maybe_clip = partial(torch.clamp, min = -1., max = 1.) if clip_x_start else identity
         
         x_start = model_output
@@ -184,7 +184,7 @@ class GaussianDiffusion(nn.Module):
         )
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
-    def p_mean_variance(self, x, cond, t):
+    def p_mean_variance(self, x, cond, t, control=None):
         # guidance clipping
         if t[0] > 1.0 * self.n_timestep:
             weight = min(self.guidance_weight, 0)
@@ -193,7 +193,7 @@ class GaussianDiffusion(nn.Module):
         else:
             weight = self.guidance_weight
 
-        model_output, model_var_values = self.model.guided_forward(x, cond, t, weight)
+        model_output, model_var_values = self.model.guided_forward(x, cond, t, weight, control=control)
         
         min_log = extract(self.posterior_log_variance_clipped, t, x.shape)
         assert torch.isfinite(min_log).all(), "min_log contains NaN or Inf!"
@@ -225,10 +225,10 @@ class GaussianDiffusion(nn.Module):
         }
     
     @torch.no_grad()
-    def p_sample(self, x, cond, t):
+    def p_sample(self, x, cond, t, control=None):
         b, *_, device = *x.shape, x.device
         model_mean, _, model_log_variance, x_start = self.p_mean_variance(
-            x=x, cond=cond, t=t
+            x=x, cond=cond, t=t, control=control
         )
         noise = torch.randn_like(model_mean)
         # no noise when t == 0
@@ -243,6 +243,7 @@ class GaussianDiffusion(nn.Module):
         self,
         shape,
         cond,
+        control=None,
         noise=None,
         constraint=None,
         return_diffusion=False,
@@ -262,7 +263,7 @@ class GaussianDiffusion(nn.Module):
         for i in tqdm(reversed(range(0, start_point))):
             # fill with i
             timesteps = torch.full((batch_size,), i, device=device, dtype=torch.long)
-            x, _ = self.p_sample(x, cond, timesteps)
+            x, _ = self.p_sample(x, cond, timesteps, control=control)
 
             if return_diffusion:
                 diffusion.append(x)
@@ -273,7 +274,7 @@ class GaussianDiffusion(nn.Module):
             return x
         
     @torch.no_grad()
-    def ddim_sample(self, shape, cond, **kwargs):
+    def ddim_sample(self, shape, cond, control=None, **kwargs):
         batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 1
 
         times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
@@ -287,7 +288,7 @@ class GaussianDiffusion(nn.Module):
 
         for time, time_next in tqdm(time_pairs, desc = 'sampling loop time step'):
             time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
-            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start = self.clip_denoised)
+            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, control=control, clip_x_start = self.clip_denoised)
 
             if time_next < 0:
                 x = x_start
@@ -307,11 +308,11 @@ class GaussianDiffusion(nn.Module):
         return x
     
     @torch.no_grad()
-    def long_ddim_sample(self, shape, cond, **kwargs):
+    def long_ddim_sample(self, shape, cond, control=None, **kwargs):
         batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 1
         
         if batch == 1:
-            return self.ddim_sample(shape, cond)
+            return self.ddim_sample(shape, cond, control=control)
 
         times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
         times = list(reversed(times.int().tolist()))
@@ -329,7 +330,7 @@ class GaussianDiffusion(nn.Module):
 
         for time, time_next, weight in tqdm(time_pairs, desc = 'sampling loop time step'):
             time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
-            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, weight=weight, clip_x_start = self.clip_denoised) 
+            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, control=control, weight=weight, clip_x_start = self.clip_denoised) 
 
             if time_next < 0:
                 x = x_start
@@ -365,7 +366,7 @@ class GaussianDiffusion(nn.Module):
 
         return sample
 
-    def _vb_terms_bpd(self, x_start, x_t, cond, t):
+    def _vb_terms_bpd(self, x_start, x_t, cond, t, control=None):
         """
         Get a term for the variational lower-bound.
 
@@ -377,7 +378,7 @@ class GaussianDiffusion(nn.Module):
                  - 'pred_xstart': the x_0 predictions.
         """
         true_mean, _, true_log_variance_clipped = self.q_posterior(x_start=x_start, x_t=x_t, t=t)
-        out = self.p_mean_variance(x_t, cond, t)
+        out = self.p_mean_variance(x_t, cond, t, control=control)
         kl = normal_kl(
             true_mean, true_log_variance_clipped, out["mean"], out["log_variance"]
         )
@@ -397,12 +398,12 @@ class GaussianDiffusion(nn.Module):
         # output = kl
         return {"output": output, "pred_xstart": out["pred_xstart"]}
     
-    def p_losses(self, x_start, cond, t):
+    def p_losses(self, x_start, cond, t, control=None):
         noise = torch.randn_like(x_start)
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
         # reconstruct
-        x_recon, variance = self.model(x_noisy, cond, t, music_drop_prob=self.music_drop_prob)
+        x_recon, variance = self.model(x_noisy, cond, t, control=control, music_drop_prob=self.music_drop_prob)
         assert noise.shape == x_recon.shape
 
         model_out = x_recon
@@ -474,7 +475,7 @@ class GaussianDiffusion(nn.Module):
         body_loss = reduce(body_loss, "b ... -> b (...)", "mean")
 
         #vlb loss
-        vlb_loss = self._vb_terms_bpd(x_start=x_start,x_t=x_noisy,cond=cond,t=t)["output"]
+        vlb_loss = self._vb_terms_bpd(x_start=x_start,x_t=x_noisy,cond=cond,t=t, control=control)["output"]
         
         losses = (
             0.636 * loss.mean(),
@@ -484,21 +485,21 @@ class GaussianDiffusion(nn.Module):
             0.01 * vlb_loss.mean(),
         )
         return sum(losses), losses
-
-    def loss(self, x, cond, t_override=None):
+    
+    def loss(self, x, cond, control=None, t_override=None):
         batch_size = len(x)
         if t_override is None:
             t = torch.randint(0, self.n_timestep, (batch_size,), device=x.device).long()
         else:
             t = torch.full((batch_size,), t_override, device=x.device).long()
-        return self.p_losses(x, cond, t)
+        return self.p_losses(x, cond, t, control=control)
 
-    def forward(self, x, cond, t_override=None):
-        return self.loss(x, cond, t_override)
+    def forward(self, x, cond, control=None, t_override=None):
+        return self.loss(x, cond, control, t_override)
 
-    def partial_denoise(self, x, cond, t):
+    def partial_denoise(self, x, cond, t, control=None):
         x_noisy = self.noise_to_t(x, t)
-        return self.p_sample_loop(x.shape, cond, noise=x_noisy, start_point=t)
+        return self.p_sample_loop(x.shape, cond, control=control, noise=x_noisy, start_point=t)
 
     def noise_to_t(self, x, timestep):
         batch_size = len(x)
@@ -512,6 +513,7 @@ class GaussianDiffusion(nn.Module):
         normalizer,
         epoch,
         render_out,
+        control=None,
         fk_out=None,
         name=None,
         sound=True,
@@ -533,6 +535,7 @@ class GaussianDiffusion(nn.Module):
                 func_class(
                     shape,
                     cond,
+                    control=control,
                     noise=noise,
                     constraint=constraint,
                     start_point=start_point,

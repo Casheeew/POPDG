@@ -1,0 +1,26 @@
+wandb/
+__pycache__
+
+/** Misc */
+test.txt
+training.log
+experiments/**
+checkpoint.pt
+
+/** Data */
+data/analysis_results_english.csv
+data/dataset_backups
+data/popdanceset.zip
+data/popdanceset/**
+data/simplifie_dataset/**
+original_music/**
+
+/** Renders */
+renders
+
+/** Eval */
+eval/motions/**
+
+/** Processed datasets */
+test
+train

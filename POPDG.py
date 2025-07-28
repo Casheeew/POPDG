@@ -12,7 +12,7 @@ from accelerate.state import AcceleratorState
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from dataset.load_popdanceset import PopDanceSet
+from dataset.load_popdanceset import PopDanceSet, SimplifieDataset
 from dataset.preprocess import increment_path
 from model.adan import Adan
 from model.iDDPM import GaussianDiffusion
@@ -51,7 +51,7 @@ class POPDG:
         checkpoint = None
         if checkpoint_path != "":
             checkpoint = torch.load(
-                checkpoint_path, map_location=self.accelerator.device
+                checkpoint_path, map_location=self.accelerator.device, weights_only=False
             )
             self.normalizer = checkpoint["normalizer"]
 
@@ -65,6 +65,9 @@ class POPDG:
             dropout=0.1,
             music_feature_dim=feature_dim,
             activation=F.gelu,
+            # ControlNet parameters
+            use_controlnet=True,
+            control_dim=156
         )
 
         smpl = SMPLSkeleton(self.accelerator.device)
@@ -98,6 +101,12 @@ class POPDG:
                     self.state.num_processes,
                 )
             )
+
+            # Freeze original model
+            self.model.requires_grad_(False)
+
+            # Unfreeze ControlNet layers
+            self.model.controlnet.requires_grad = True
 
     def maybe_wrap(self, x, num):
         return x if num == 1 else {f"module.{key}": value for key, value in x.items()}
@@ -133,19 +142,37 @@ class POPDG:
             train_dataset = pickle.load(open(train_tensor_dataset_path, "rb"))
             test_dataset = pickle.load(open(test_tensor_dataset_path, "rb"))
         else:
-            train_dataset = PopDanceSet(
+            # train_dataset = PopDanceSet(
+            #     data_path=opt.data_path,
+            #     backup_path=opt.processed_data_dir,
+            #     train=True,
+            #     force_reload=opt.force_reload,
+            # )
+            # test_dataset = PopDanceSet(
+            #     data_path=opt.data_path,
+            #     backup_path=opt.processed_data_dir,
+            #     train=False,
+            #     normalizer=train_dataset.normalizer,
+            #     force_reload=opt.force_reload,
+            # )
+            
+            train_dataset = SimplifieDataset(
                 data_path=opt.data_path,
                 backup_path=opt.processed_data_dir,
                 train=True,
                 force_reload=opt.force_reload,
             )
-            test_dataset = PopDanceSet(
+            test_dataset = SimplifieDataset(
                 data_path=opt.data_path,
                 backup_path=opt.processed_data_dir,
                 train=False,
                 normalizer=train_dataset.normalizer,
                 force_reload=opt.force_reload,
             )
+
+            print(train_dataset)
+            print(test_dataset)
+
             # cache the dataset in case
             if self.accelerator.is_main_process:
                 pickle.dump(train_dataset, open(train_tensor_dataset_path, "wb"))
@@ -156,11 +183,17 @@ class POPDG:
         self.normalizer = test_dataset.normalizer
 
         num_cpus = multiprocessing.cpu_count()
+
+        # print("num_cpus", num_cpus)
+
+        print("Using device: ")
+        print(torch.cuda.get_device_name(torch.cuda.current_device()))
+
         train_data_loader = DataLoader(
             train_dataset,
             batch_size=opt.batch_size,
             shuffle=True,
-            num_workers=min(int(num_cpus * 0.75), 32),
+            num_workers=2,
             # num_workers=10,
             pin_memory=True,
             drop_last=True,
@@ -169,7 +202,7 @@ class POPDG:
             test_dataset,
             batch_size=opt.batch_size,
             shuffle=True,
-            num_workers=2,
+            num_workers=1,
             pin_memory=True,
             drop_last=True,
         )
@@ -207,11 +240,20 @@ class POPDG:
             avg_vlbloss = 0
             # train
             self.train()
-            for step, (x, cond, filename, wavnames) in enumerate(
+            for step, (x_original, x, cond, filename, wavnames) in enumerate(
                 self.load_loop(train_data_loader)
             ):
+
+                # We need to pad with 0s along dimension 1 because we used slices of length 2 (instead of 5)
+                pad_len = 150 - x.size(1) # 90
+                x_original = F.pad(x_original, (0, 0, 0, pad_len))
+                x = F.pad(x, (0, 0, 0, pad_len))
+                cond = F.pad(cond, (0, 0, 0, pad_len))
+
+                # print(f"original motion shape: {x_original.shape}, simplified motion shape: {x.shape}, audio feature shape: {cond.shape}")
+
                 total_loss, (loss, v_loss, fk_loss, body_loss, vlb_loss) = self.diffusion(
-                    x, cond, t_override=None
+                    x, cond, control=x_original, t_override=None
                 )
                 self.optim.zero_grad()
                 self.accelerator.backward(total_loss)
@@ -265,14 +307,24 @@ class POPDG:
                     shape = (render_count, self.horizon, self.repr_dim)
                     print("Generating Sample")
                     # draw a music from the test dataset
-                    (x, cond, filename, wavnames) = next(iter(test_data_loader))
+                    (x_original, x, cond, filename, wavnames) = next(iter(test_data_loader))
+
+                    # We need to pad with 0s along dimension 1 because we used slices of length 2 (instead of 5)
+                    pad_len = 150 - x.size(1) # 90
+                    x_original = F.pad(x_original, (0, 0, 0, pad_len))
+                    x = F.pad(x, (0, 0, 0, pad_len))
+                    cond = F.pad(cond, (0, 0, 0, pad_len))
+
                     cond = cond.to(self.accelerator.device)
+                    x_original = x_original.to(self.accelerator.device)
+
                     self.diffusion.render_sample(
                         shape,
                         cond[:render_count],
                         self.normalizer,
                         epoch,
                         os.path.join(opt.render_dir, "train_" + opt.exp_name),
+                        control=x_original[:render_count],
                         name=wavnames[:render_count],
                         sound=True,
                     )
@@ -281,6 +333,7 @@ class POPDG:
             wandb.run.finish()
 
 
+    # todo! add x_original as control
     def render_sample(
         self, data_tuple, label, render_dir, render_count=-1, fk_out=None, render=True
     ):
