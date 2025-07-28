@@ -7,11 +7,17 @@ import soundfile as sf
 from tqdm import tqdm
 from pytorch3d.transforms import matrix_to_axis_angle
 
+def stretch_audio(audio, rate=0.5):
+    return lr.effects.time_stretch(audio, rate=rate)
+
 def slice_audio(audio_file, stride, length, out_dir):
     audio, sr = lr.load(audio_file, sr=None)
     file_name = Path(audio_file).stem
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Stretch audio wav file
+    audio = stretch_audio(audio)
 
     start_idx, idx = 0, 0
     window, stride_step = int(length * sr), int(stride * sr)
@@ -34,6 +40,10 @@ def slice_motion(motion_file, stride, length, num_slices, out_dir):
     
     pos = motion["pred_trans"].squeeze(1)
     q = matrix_to_axis_angle(motion["pred_rotmat"])
+
+    pos = pos.repeat_interleave(2, dim=0)
+    q = q.repeat_interleave(2, dim=0)  
+
     # pos, q = motion['pos'] * motion['scale'], motion['q']
     window, stride_step = int(length * 30), int(stride * 30)
     slice_count = 0
