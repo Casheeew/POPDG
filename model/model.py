@@ -102,11 +102,11 @@ class DecoderLayerStack(nn.Module):
         super().__init__()
         self.stack = stack
 
-    def forward(self, x, cond, t, cond_drop_prob, control_features=None):
+    def forward(self, x, cond, t, cond_drop_prob, control_drop_prob, control_features=None):
         for i, layer in enumerate(self.stack):
             # Pass control features to each layer
             control_feat = control_features[i] if control_features is not None else None
-            x = layer(x, cond, t, cond_drop_prob, control_feat)
+            x = layer(x, cond, t, cond_drop_prob, control_drop_prob, control_feat)
         return x
 
 class MusicEncoder(nn.Module):
@@ -325,6 +325,7 @@ class DanceDecoder(nn.Module):
         memory,
         t,
         cond_drop_prob,
+        control_drop_prob,
         control_features=None, # This is the original sequence to be conditioned on.
         tgt_mask=None,
         memory_mask=None,
@@ -421,12 +422,12 @@ class ControlNet(nn.Module):
                 latent_dim, dropout, batch_first=True
             )
         
-        # Control input projection
+        # # Control input projection
 
-        self.control_projection = nn.Linear(control_dim, latent_dim)
+        # self.control_projection = nn.Linear(control_dim, latent_dim)
         
-        # Control features dropout
-        self.control_dropout = nn.Dropout()
+        # # Control features dropout
+        # self.control_dropout = nn.Dropout()
 
         # Input projection for noisy dance features
         self.input_projection = nn.Linear(nfeats, latent_dim)
@@ -464,29 +465,31 @@ class ControlNet(nn.Module):
     def forward(
         self, 
         x: Tensor, 
-        control: Tensor, 
+        control_embed: Tensor, 
         music_cond: Tensor, 
         times: Tensor, 
-        music_drop_prob: float = 0.0
+        music_drop_prob: float = 0.0,
+        control_drop_prob: float = 0.0
     ):
         """
         Args:
             x: Noisy dance input [batch, frames, features]
-            control: Control input (e.g., pose) [batch, frames, control_dim]
+            control_embed: Control input embedding (e.g., pose) [batch, frames, latent_dim]
             music_cond: Music conditioning [batch, frames, latent_dim]
             times: Timestep [batch]
             music_drop_prob: Dropout probability for music conditioning
+            control_drop_prob: Dropout probability for control signal (original dance motion seq)
         
         Returns:
             List of control features to be added to main model layers
         """
         
-        # Project control input
-        control_embed = self.control_projection(control)
-        control_embed = self.abs_pos_encoding(control_embed)
+        # # Project control input
+        # control_embed = self.control_projection(control)
+        # control_embed = self.abs_pos_encoding(control_embed)
 
-        # ! Try adding dropout to prevent over-reliance on original dance
-        control_embed = self.control_dropout(control_embed)
+        # # ! Try adding dropout to prevent over-reliance on original dance
+        # control_embed = self.control_dropout(control_embed)
         
         # Project and encode input dance features
 
@@ -505,7 +508,7 @@ class ControlNet(nn.Module):
         # Forward through ControlNet layers
         control_features = []
         for layer, zero_conv in zip(self.controlnet_layers, self.zero_convs):
-            x = layer(x, music_tokens, t, music_drop_prob)
+            x = layer(x, music_tokens, t, music_drop_prob, control_drop_prob)
             # Apply zero convolution and store
             control_feat = zero_conv(x)
             control_features.append(control_feat)
@@ -551,6 +554,10 @@ class Model(nn.Module):
         self.TimeEmbed = DiffTimeEmb(latent_dim)
         # null embeddings for guidance dropout
         self.null_music_embed = nn.Parameter(torch.randn(1, nframes, latent_dim))
+        # todo! see if initialize with randn or 0
+        self.null_control_embed = nn.Parameter(torch.randn(1, nframes, latent_dim))
+
+
         self.norm_music = nn.LayerNorm(latent_dim)
         # If there are requirements for GPU memory usage and training speed, it can be set to False.
         self.music_temporalcoding = MusicConvModule(latent_dim,False)
@@ -558,6 +565,10 @@ class Model(nn.Module):
         # input projection
         self.input_projection = nn.Linear(nfeats, latent_dim)
         self.music_encoder = nn.Sequential()
+
+        # todo!
+        self.control_encoder = nn.Identity()
+
         for _ in range(2):
             self.music_encoder.append(
                 MusicEncoder(
@@ -612,8 +623,8 @@ class Model(nn.Module):
             self.controlnet = None
 
     def guided_forward(self, x, music, times, guidance_weight, control=None):
-        unc, unc_variance = self.forward(x, music, times, music_drop_prob=1, control=control)
-        conditioned, conditioned_variance = self.forward(x, music, times, music_drop_prob=0, control=control)
+        unc, unc_variance = self.forward(x, music, times, music_drop_prob=1, control=control, control_drop_prob=1)
+        conditioned, conditioned_variance = self.forward(x, music, times, music_drop_prob=0, control=control, control_drop_prob=0)
 
         output = unc + (conditioned - unc) * guidance_weight
         variance = unc_variance + (conditioned_variance - unc_variance) * guidance_weight
@@ -625,6 +636,7 @@ class Model(nn.Module):
         music: Tensor, 
         times: Tensor, 
         music_drop_prob: float = 0.0,
+        control_drop_prob: float = 0.0,
         control: Optional[Tensor] = None
     ):
         """
@@ -633,6 +645,7 @@ class Model(nn.Module):
             music: Music features [batch, frames, music_features]
             times: Timestep [batch]
             music_drop_prob: Dropout probability for music conditioning
+            control_drop_prob: Dropout probability for control signal (original dance seq)
             control: Optional control input for ControlNet [batch, frames, control_dim]
         """
         batch_size, device = x.shape[0], x.device
@@ -640,9 +653,11 @@ class Model(nn.Module):
         new_x = self.input_projection(x)
         new_x = self.abs_pos_encoding(new_x)
 
+        # Music
+
         # create music conditional embedding with conditional dropout
-        mask = prob_mask_like((batch_size,), 1 - music_drop_prob, device=device)
-        mask_embed = rearrange(mask, "b -> b 1 1")
+        music_mask = prob_mask_like((batch_size,), 1 - music_drop_prob, device=device)
+        music_mask_embed = rearrange(music_mask, "b -> b 1 1")
 
         music = music.to(torch.float32)
         music_tokens = self.cond_projection(music)
@@ -650,7 +665,7 @@ class Model(nn.Module):
         music_tokens = self.music_encoder(music_tokens)
 
         null_cond_embed = self.null_music_embed.to(music_tokens.dtype)
-        music_tokens = torch.where(mask_embed, music_tokens, null_cond_embed)
+        music_tokens = torch.where(music_mask_embed, music_tokens, null_cond_embed)
 
         t, t_tokens = self.TimeEmbed(times)
 
@@ -660,16 +675,34 @@ class Model(nn.Module):
         c = torch.cat((music_tokens, t_tokens), dim=-2)
         music_tokens = self.norm_music(c)
 
+        # Control
+
+        # create control conditional embedding with conditional dropout
+        control_mask = prob_mask_like((batch_size,), 1 - control_drop_prob, device=device)
+        control_mask_embed = rearrange(control_mask, "b -> b 1 1")
+
+        # Project control input
+        control_embed = self.control_projection(control)
+        control_embed = self.abs_pos_encoding(control_embed)
+        control_embed = self.control_encoder(control_embed)
+
+        # # ! Try adding dropout to prevent over-reliance on original dance
+        # control_embed = self.control_dropout(control_embed)
+
+        null_control_embed = self.null_control_embed.to(control_embed.dtype)
+        control_embed = torch.where(control_mask_embed, control_embed, null_control_embed)
+
+
         # Generate ControlNet features if enabled
         control_features = None
         if self.use_controlnet and control is not None:
-            control_features = self.controlnet(x, control, music_tokens, times, music_drop_prob)
+            control_features = self.controlnet(x, control_embed, music_tokens, times, music_drop_prob, control_drop_prob)
 
         # print("control features: ")
         # print(control_features)
 
         # Forward through decoder with ControlNet features
-        output_1 = self.DecoderSequence(new_x, music_tokens, t, music_drop_prob, control_features)
+        output_1 = self.DecoderSequence(new_x, music_tokens, t, music_drop_prob, control_drop_prob, control_features)
 
         output = self.final_layer(output_1)
         variance = torch.clamp(self.variance_layer(output_1), min=-1.0, max=1.0)

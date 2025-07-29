@@ -71,6 +71,9 @@ class POPDG:
         )
 
         smpl = SMPLSkeleton(self.accelerator.device)
+        # Drop music: 0.25
+        # Drop control: 0.25
+        # Both dropped: 0.0625
         diffusion = GaussianDiffusion(
             model,
             self.horizon,
@@ -82,6 +85,7 @@ class POPDG:
             loss_type="l2",
             use_p2=False,
             music_drop_prob=0.25,
+            control_drop_prob=0.25,
             guidance_weight=2,
         )
 
