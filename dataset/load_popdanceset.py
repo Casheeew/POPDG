@@ -428,7 +428,7 @@ class SimplifieDataset(Dataset):
 
             simplified_root_pos = simplified_data["pos"]
             # simplified_root_pos = simplified_root_pos.squeeze(1)
-            simplified_local_q = original_data["q"]
+            simplified_local_q = simplified_data["q"]
             # simplified_local_q = simplified_local_q.reshape(simplified_local_q.shape[0], -1)
 
             # all_pos.append(data["pos"])
