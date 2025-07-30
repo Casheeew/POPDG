@@ -9,7 +9,7 @@ def train(opt):
     """Train the model based on the provided options."""
     logging.info("Initializing the model...")
     try:
-        model = POPDG(opt.feature_type)
+        model = POPDG(opt.feature_type, opt.checkpoint)
     except Exception as e:
         logging.error("Failed to initialize the POPDG model: %s", e)
         logging.error("Exception details:\n%s", traceback.format_exc())

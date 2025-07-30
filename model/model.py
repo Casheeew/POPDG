@@ -567,6 +567,7 @@ class Model(nn.Module):
         self.music_encoder = nn.Sequential()
 
         # todo!
+        self.control_projection = nn.Linear(control_dim, latent_dim)
         self.control_encoder = nn.Identity()
 
         for _ in range(2):

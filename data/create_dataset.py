@@ -28,10 +28,10 @@ def create_dataset(options):
         test_wavs = slice_path / f"test/{strat}/wavs"
 
         print("Slicing train data")
-        slice_and_clean(train_motions, train_wavs)
+        slice_and_clean(train_motions, train_wavs, stride=0.5)
 
         print("Slicing test data")
-        slice_and_clean(test_motions, test_wavs)
+        slice_and_clean(test_motions, test_wavs, stride=0.5)
 
         # Extracting audio features
         if options.extract_baseline:

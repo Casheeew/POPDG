@@ -5,6 +5,7 @@ from functools import partial
 from pathlib import Path
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import wandb
 from accelerate import Accelerator, DistributedDataParallelKwargs
@@ -18,6 +19,9 @@ from model.adan import Adan
 from model.iDDPM import GaussianDiffusion
 from model.model import Model
 from vis import SMPLSkeleton
+
+import torchinfo
+import time
 
 class POPDG:
     def __init__(
@@ -86,14 +90,21 @@ class POPDG:
             use_p2=False,
             music_drop_prob=0.25,
             control_drop_prob=0.25,
-            guidance_weight=2,
+            guidance_weight=1,
         )
 
-        print(
-            "Model has {} parameters".format(sum(y.numel() for y in model.parameters()))
-        )
+        # print("Using device: ")
+        # print(torch.cuda.get_device_name(torch.cuda.current_device()))
+
 
         self.model = self.accelerator.prepare(model)
+
+        # print("self.accelerator.device", self.accelerator.device)
+
+        if torch.cuda.device_count() > 1:
+            print("Using", torch.cuda.device_count(), "GPUs.")
+            self.diffusion = nn.parallel.DataParallel(diffusion, device_ids=[0, 1])
+
         self.diffusion = diffusion.to(self.accelerator.device)
         optim = Adan(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         self.optim = self.accelerator.prepare(optim)
@@ -103,14 +114,39 @@ class POPDG:
                 self.maybe_wrap(
                     checkpoint["ema_state_dict" if EMA else "model_state_dict"],
                     self.state.num_processes,
-                )
+                ),
+                strict=False
             )
 
             # Freeze original model
             self.model.requires_grad_(False)
 
             # Unfreeze ControlNet layers
-            self.model.controlnet.requires_grad = True
+            self.model.controlnet.requires_grad_(True)
+
+            # print('----------------------')
+            # for p in self.model.controlnet.parameters():
+            #     print(p.requires_grad)
+
+        
+        # # Compile to speed up 
+
+        # print("Compiling model...")
+        # compilation_start = time.time()
+
+        # self.model.controlnet.compile()
+        # # self.diffusion.compile()
+        # print("Model compilation completed! Took {} seconds.".format(time.time() - compilation_start))
+
+        
+        print(
+            "Model has {} parameters, and {} trainable parameters.".format(sum(y.numel() for y in model.parameters()), sum(p.numel() for p in model.parameters() if p.requires_grad))
+        )
+        
+
+        batch_size = 5
+        input_size = [(batch_size, 150, 156), (batch_size, 150, 4800), (batch_size, 150, 156)]
+        # print(torchinfo.summary(self.diffusion, input_size=input_size))
 
     def maybe_wrap(self, x, num):
         return x if num == 1 else {f"module.{key}": value for key, value in x.items()}
@@ -174,8 +210,8 @@ class POPDG:
                 force_reload=opt.force_reload,
             )
 
-            print(train_dataset)
-            print(test_dataset)
+            # print(train_dataset)
+            # print(test_dataset)
 
             # cache the dataset in case
             if self.accelerator.is_main_process:
@@ -190,14 +226,11 @@ class POPDG:
 
         # print("num_cpus", num_cpus)
 
-        print("Using device: ")
-        print(torch.cuda.get_device_name(torch.cuda.current_device()))
-
         train_data_loader = DataLoader(
             train_dataset,
             batch_size=opt.batch_size,
             shuffle=True,
-            num_workers=2,
+            num_workers=0,
             # num_workers=10,
             pin_memory=True,
             drop_last=True,
@@ -206,7 +239,7 @@ class POPDG:
             test_dataset,
             batch_size=opt.batch_size,
             shuffle=True,
-            num_workers=1,
+            num_workers=0,
             pin_memory=True,
             drop_last=True,
         )
@@ -248,11 +281,15 @@ class POPDG:
                 self.load_loop(train_data_loader)
             ):
 
-                # We need to pad with 0s along dimension 1 because we used slices of length 2 (instead of 5)
-                pad_len = 150 - x.size(1) # 90
-                x_original = F.pad(x_original, (0, 0, 0, pad_len))
-                x = F.pad(x, (0, 0, 0, pad_len))
-                cond = F.pad(cond, (0, 0, 0, pad_len))
+                # # # We need to pad with 0s along dimension 1 because we used slices of length 2 (instead of 5)
+                # # pad_len = 150 - x.size(1) # 90
+                # # x_original = F.pad(x_original, (0, 0, 0, pad_len))
+                # # x = F.pad(x, (0, 0, 0, pad_len))
+                # # cond = F.pad(cond, (0, 0, 0, pad_len))
+                # print(x_original.shape)
+                # print(x.shape)
+                # print(cond.shape)
+                # print('-------------------')
 
                 # print(f"original motion shape: {x_original.shape}, simplified motion shape: {x.shape}, audio feature shape: {cond.shape}")
 
@@ -307,27 +344,53 @@ class POPDG:
                     }
                     torch.save(ckpt, os.path.join(self.wdir, f"train-{epoch}.pt"))
                     # generate four samples
-                    render_count = 4
+                    render_count = 2
                     shape = (render_count, self.horizon, self.repr_dim)
                     print("Generating Sample")
                     # draw a music from the test dataset
                     (x_original, x, cond, filename, wavnames) = next(iter(test_data_loader))
 
-                    # We need to pad with 0s along dimension 1 because we used slices of length 2 (instead of 5)
-                    pad_len = 150 - x.size(1) # 90
-                    x_original = F.pad(x_original, (0, 0, 0, pad_len))
-                    x = F.pad(x, (0, 0, 0, pad_len))
-                    cond = F.pad(cond, (0, 0, 0, pad_len))
+                    # # We need to pad with 0s along dimension 1 because we used slices of length 2 (instead of 5)
+                    # pad_len = 150 - x.size(1) # 90
+                    # x_original = F.pad(x_original, (0, 0, 0, pad_len))
+                    # x = F.pad(x, (0, 0, 0, pad_len))
+                    # cond = F.pad(cond, (0, 0, 0, pad_len))
 
                     cond = cond.to(self.accelerator.device)
                     x_original = x_original.to(self.accelerator.device)
 
+
+
+                    os.makedirs(os.path.join(opt.render_dir, "train_" + opt.exp_name), exist_ok=True)
+                    # Render model output
                     self.diffusion.render_sample(
                         shape,
                         cond[:render_count],
                         self.normalizer,
                         epoch,
-                        os.path.join(opt.render_dir, "train_" + opt.exp_name),
+                        os.path.join(opt.render_dir, "train_" + opt.exp_name, "out"),
+                        control=x_original[:render_count],
+                        name=wavnames[:render_count],
+                        sound=True,
+                    )
+                    # Render original dance
+                    self.diffusion.render_sample(
+                        x_original[:render_count],
+                        cond[:render_count],
+                        self.normalizer,
+                        epoch,
+                        os.path.join(opt.render_dir, "train_" + opt.exp_name, "original"),
+                        control=x_original[:render_count],
+                        name=wavnames[:render_count],
+                        sound=True,
+                    )
+                    # Render simplified dance
+                    self.diffusion.render_sample(
+                        x[:render_count],
+                        cond[:render_count],
+                        self.normalizer,
+                        epoch,
+                        os.path.join(opt.render_dir, "train_" + opt.exp_name, "simplified"),
                         control=x_original[:render_count],
                         name=wavnames[:render_count],
                         sound=True,

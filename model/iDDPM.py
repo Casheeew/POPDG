@@ -57,6 +57,7 @@ class GaussianDiffusion(nn.Module):
         guidance_weight=3,
         use_p2=False,
         music_drop_prob=0.2,
+        control_drop_prob=0.2,
     ):
         super().__init__()
         self.horizon = horizon
@@ -66,6 +67,7 @@ class GaussianDiffusion(nn.Module):
         self.master_model = copy.deepcopy(self.model)
 
         self.music_drop_prob = music_drop_prob
+        self.control_drop_prob = control_drop_prob
 
         # make a SMPL instance for FK module
         self.smpl = smpl
@@ -403,7 +405,7 @@ class GaussianDiffusion(nn.Module):
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
         # reconstruct
-        x_recon, variance = self.model(x_noisy, cond, t, control=control, music_drop_prob=self.music_drop_prob)
+        x_recon, variance = self.model(x_noisy, cond, t, control=control, music_drop_prob=self.music_drop_prob, control_drop_prob=self.control_drop_prob)
         assert noise.shape == x_recon.shape
 
         model_out = x_recon
