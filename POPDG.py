@@ -237,7 +237,8 @@ class POPDG:
         )
         test_data_loader = DataLoader(
             test_dataset,
-            batch_size=opt.batch_size,
+            # batch_size=opt.batch_size,
+            batch_size=2,
             shuffle=True,
             num_workers=0,
             pin_memory=True,
