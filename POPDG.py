@@ -28,7 +28,7 @@ class POPDG:
         self,
         feature_type,
         checkpoint_path="",
-        EMA=True,
+        EMA=False,
         learning_rate=2e-4,
         weight_decay=0.02,
     ):
@@ -115,13 +115,15 @@ class POPDG:
                     checkpoint["ema_state_dict" if EMA else "model_state_dict"],
                     self.state.num_processes,
                 ),
-                strict=False
+                # strict=False
             )
 
             # Freeze original model
             self.model.requires_grad_(False)
 
             # Unfreeze ControlNet layers
+            # Use .module when distributed training
+            # self.model.module.controlnet.requires_grad_(True)
             self.model.controlnet.requires_grad_(True)
 
             # print('----------------------')
@@ -258,9 +260,9 @@ class POPDG:
         if self.accelerator.is_main_process:
             save_dir = str(increment_path(Path(opt.project) / opt.exp_name))
             opt.exp_name = save_dir.split("/")[-1]
-            wandb.init(project=opt.wandb_pj_name, name=opt.exp_name)
+            # wandb.init(project=opt.wandb_pj_name, name=opt.exp_name)
             # To resume training after an interruption, use the next line of code.
-            # wandb.init(project=opt.wandb_pj_name, name=opt.exp_name, resume='must', id='')
+            wandb.init(project=opt.wandb_pj_name, name=opt.exp_name, resume='must', id='ygwbk671')
             save_dir = Path(save_dir)
             self.wdir = save_dir / "weights"
             self.wdir.mkdir(parents=True, exist_ok=True)
@@ -268,9 +270,9 @@ class POPDG:
         self.accelerator.wait_for_everyone()
     
     def run_training_epochs(self, train_data_loader, test_data_loader, opt):
-        # start_epoch = 1301
-        # for epoch in range(start_epoch, opt.epochs + 1):
-        for epoch in range(1, opt.epochs + 1):
+        start_epoch = 296
+        for epoch in range(start_epoch, opt.epochs + 1):
+        # for epoch in range(1, opt.epochs + 1):
             avg_loss = 0
             avg_vloss = 0
             avg_fkloss = 0
@@ -405,18 +407,33 @@ class POPDG:
     def render_sample(
         self, data_tuple, label, render_dir, render_count=-1, fk_out=None, render=True
     ):
-        _, cond, wavname = data_tuple
-        assert len(cond.shape) == 3
+        _, cond, motion, wavname = data_tuple
+        # assert len(cond.shape) == 3
         if render_count < 0:
             render_count = len(cond)
         shape = (render_count, self.horizon, self.repr_dim)
         cond = cond.to(self.accelerator.device)
+        motion = motion.to(self.accelerator.device)
         self.diffusion.render_sample(
             shape,
             cond[:render_count],
             self.normalizer,
             label,
-            render_dir,
+            os.path.join(render_dir, "out"),
+            control=motion[:render_count],
+            name=wavname[:render_count],
+            sound=True,
+            mode="long",
+            fk_out=fk_out,
+            render=render
+        )
+        self.diffusion.render_sample(
+            motion[:render_count],
+            cond[:render_count],
+            self.normalizer,
+            label,
+            os.path.join(render_dir, "original"),
+            control=motion[:render_count],
             name=wavname[:render_count],
             sound=True,
             mode="long",
