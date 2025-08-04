@@ -437,18 +437,24 @@ class ControlNet(nn.Module):
         # Time embedding (same as main model)
         self.time_embed = DiffTimeEmb(latent_dim)
 
+        self.activation = activation
         # Control
         
         self.control_projection = nn.Linear(control_dim, latent_dim)
         # self.control_encoder = nn.Identity()
-        self.control_encoder = nn.Sequential(
-            nn.Linear(latent_dim, latent_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(latent_dim, latent_dim),
-            nn.Dropout(dropout),
-        )
+        # self.control_encoder = nn.Sequential(
+        #     nn.Linear(latent_dim, latent_dim),
+        #     nn.ReLU(),
+        #     nn.Dropout(dropout),
+        #     nn.Linear(latent_dim, latent_dim),
+        #     nn.Dropout(dropout),
+        # )
         
+        self.linear1 = nn.Linear(latent_dim, latent_dim)
+        self.linear2 = nn.Linear(latent_dim, latent_dim)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+
         # Encoder layers that mirror the decoder structure
         controlnet_layers = nn.ModuleList([])
         for _ in range(num_layers):
@@ -476,6 +482,10 @@ class ControlNet(nn.Module):
             nn.init.zeros_(zero_conv.weight)
             nn.init.zeros_(zero_conv.bias)
     
+    def mlp_encoder(self, x: Tensor) -> Tensor:
+        x = self.linear2(self.dropout1(self.activation(self.linear1(x))))
+        return self.dropout2(x)
+
     def forward(
         self, 
         x: Tensor, 
@@ -520,7 +530,7 @@ class ControlNet(nn.Module):
         # Project control input
         control = self.control_projection(control)
         control = self.abs_pos_encoding2(control)
-        control_embed = self.control_encoder(control)
+        control_embed = self.mlp_encoder(control)
 
         # Residual
         control_embed = control + control_embed
