@@ -110,12 +110,13 @@ class POPDG:
         self.optim = self.accelerator.prepare(optim)
 
         if checkpoint_path != "":
+            print("Loading checkpoint: ", checkpoint_path)
             self.model.load_state_dict(
                 self.maybe_wrap(
                     checkpoint["ema_state_dict" if EMA else "model_state_dict"],
                     self.state.num_processes,
                 ),
-                # strict=False
+                strict=False
             )
 
             # Freeze original model
@@ -260,9 +261,9 @@ class POPDG:
         if self.accelerator.is_main_process:
             save_dir = str(increment_path(Path(opt.project) / opt.exp_name))
             opt.exp_name = save_dir.split("/")[-1]
-            # wandb.init(project=opt.wandb_pj_name, name=opt.exp_name)
+            wandb.init(project=opt.wandb_pj_name, name=opt.exp_name)
             # To resume training after an interruption, use the next line of code.
-            wandb.init(project=opt.wandb_pj_name, name=opt.exp_name, resume='must', id='ygwbk671')
+            # wandb.init(project=opt.wandb_pj_name, name=opt.exp_name, resume='must', id='ygwbk671')
             save_dir = Path(save_dir)
             self.wdir = save_dir / "weights"
             self.wdir.mkdir(parents=True, exist_ok=True)
@@ -270,7 +271,7 @@ class POPDG:
         self.accelerator.wait_for_everyone()
     
     def run_training_epochs(self, train_data_loader, test_data_loader, opt):
-        start_epoch = 296
+        start_epoch = 1
         for epoch in range(start_epoch, opt.epochs + 1):
         # for epoch in range(1, opt.epochs + 1):
             avg_loss = 0

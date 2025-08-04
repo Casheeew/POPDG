@@ -97,6 +97,16 @@ class DiffTimeEmb(nn.Module):
 
         return t,t_tokens 
 
+class EncoderLayerStack(nn.Module):
+    def __init__(self, stack):
+        super().__init__()
+        self.stack = stack
+
+    def forward(self, x, t):
+        for layer in self.stack:
+            x = layer(x, t)
+        return x
+
 class DecoderLayerStack(nn.Module):
     def __init__(self, stack):
         super().__init__()
@@ -270,7 +280,94 @@ class DS_Attention(nn.Module):
         
         return attn_probs_clone     
         
+# Same as DanceDecoder, but with cross attention removed.
+class DanceEncoder(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        nhead: int,
+        dim_feedforward=2048,
+        dropout=0.1,
+        activation=F.relu,
+        layer_norm_eps=1e-5,
+        batch_first=False,
+        device=None,
+        dtype=None,
+        rotary=None,
+    ):
+        super().__init__()
+        self.spatio_attn = DS_Attention(d_model, 156, 4)
+        self.temporal_attn = nn.MultiheadAttention(
+            d_model, nhead, dropout=dropout, batch_first=batch_first
+        )
+        
+        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(dim_feedforward, d_model)
 
+        self.norm1 = nn.LayerNorm(d_model, eps=layer_norm_eps)
+        self.norm2 = nn.LayerNorm(d_model, eps=layer_norm_eps)
+        self.norm3 = nn.LayerNorm(d_model, eps=layer_norm_eps)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+        self.dropout3 = nn.Dropout(dropout)
+        self.activation = activation
+
+        # If there are requirements for GPU memory usage and training speed, it can be set to False.
+        self.align1 = AlignmentModule(d_model, False)
+        self.align2 = AlignmentModule(d_model, False)
+
+        self.rotary = rotary
+        self.use_rotary = rotary is not None
+
+    def forward(
+        self,
+        src,
+        t,
+        src_mask=None,
+        src_key_padding_mask=None,
+    ):
+        x = src
+        
+        # Spatial attention
+        x_1 = self.DS_Attn(self.norm1(x))
+        x = x + x_1
+        
+        # Temporal self-attention
+        x_2 = self.DT_Attn(self.norm2(x), src_mask, src_key_padding_mask)
+        x = x + self.align1(x_2, t)
+        
+        # Feed-forward
+        x_3 = self.ff_block(self.norm3(x))
+        x = x + self.align2(x_3, t)
+        
+        return x
+
+    # self-spacial-attention block
+    def DS_Attn(self, x):
+        qk = self.rotary.rotate_queries_or_keys(x) if self.use_rotary else x
+        
+        x = self.spatio_attn(qk,qk,x)
+        
+        return self.dropout1(x)
+      
+    # self-temporal-attention block
+    def DT_Attn(self, x, attn_mask, key_padding_mask):
+        qk = self.rotary.rotate_queries_or_keys(x) if self.use_rotary else x
+        x = self.temporal_attn(
+            qk,
+            qk,
+            x,
+            attn_mask=attn_mask,
+            key_padding_mask=key_padding_mask,
+            need_weights=False,
+        )[0]
+        return self.dropout2(x)
+    
+    # feed forward block
+    def ff_block(self, x):
+        x = self.linear2(self.dropout(self.activation(self.linear1(x))))
+        return self.dropout3(x)
 
 class DanceDecoder(nn.Module):
     def __init__(
@@ -451,6 +548,23 @@ class ControlNet(nn.Module):
             )
         
         self.controlnet_layers = controlnet_layers
+
+        encoderstack = nn.ModuleList([])
+        for _ in range(num_layers // 2):
+            encoderstack.append(
+                DanceEncoder(
+                    latent_dim,
+                    num_heads,
+                    dim_feedforward=ff_dim,
+                    dropout=dropout,
+                    activation=activation,
+                    batch_first=True,
+                    rotary=self.rotary,
+                )
+            )
+        
+        # 235277576, 85927936, 142370816
+        self.EncoderSequence = EncoderLayerStack(encoderstack)
         
         # Zero convolution layers for stable training
         self.zero_convs = nn.ModuleList([
@@ -496,11 +610,13 @@ class ControlNet(nn.Module):
         x = self.input_projection(x)
         x = self.abs_pos_encoding(x)
         
-        # Add control to input
-        x = x + control_embed
-        
         # Time embedding
         t, t_tokens = self.time_embed(times)
+
+        control_embed = self.EncoderSequence(control_embed, t)
+        
+        # Add control to input
+        x = x + control_embed
         
         # Combine music conditioning with time tokens
         music_tokens = torch.cat((music_cond, t_tokens), dim=-2)
@@ -566,9 +682,9 @@ class Model(nn.Module):
         self.input_projection = nn.Linear(nfeats, latent_dim)
         self.music_encoder = nn.Sequential()
 
-        # todo!
+        # dance encoder
         self.control_projection = nn.Linear(control_dim, latent_dim)
-        self.control_encoder = nn.Identity()
+        # self.control_encoder = nn.Sequential()
 
         for _ in range(2):
             self.music_encoder.append(
@@ -685,7 +801,7 @@ class Model(nn.Module):
         # Project control input
         control_embed = self.control_projection(control)
         control_embed = self.abs_pos_encoding(control_embed)
-        control_embed = self.control_encoder(control_embed)
+        # control_embed = self.control_encoder(control_embed)
 
         # # ! Try adding dropout to prevent over-reliance on original dance
         # control_embed = self.control_dropout(control_embed)
