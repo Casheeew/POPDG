@@ -402,6 +402,7 @@ class ControlNet(nn.Module):
         self,
         nfeats: int,
         control_dim: int,  # Dimension of control input (e.g., pose keypoints)
+        nframes: int = 150,  # 5 seconds, 30 fps
         latent_dim: int = 256,
         ff_dim: int = 1024,
         num_layers: int = 4,
@@ -415,25 +416,38 @@ class ControlNet(nn.Module):
         # Rotary embeddings (same as main model)
         self.rotary = None
         self.abs_pos_encoding = nn.Identity()
+        self.abs_pos_encoding2 = nn.Identity()
         if use_rotary:
             self.rotary = RotaryEmbedding(dim=latent_dim)
         else:
             self.abs_pos_encoding = PositionalEncoding(
                 latent_dim, dropout, batch_first=True
             )
-        
-        # # Control input projection
+            self.abs_pos_encoding2 = PositionalEncoding(
+                latent_dim, dropout, batch_first=True
+            )
 
-        # self.control_projection = nn.Linear(control_dim, latent_dim)
-        
-        # # Control features dropout
-        # self.control_dropout = nn.Dropout()
+        # todo! see if initialize with randn or 0
+        self.null_control_embed = nn.Parameter(torch.randn(1, nframes, latent_dim))
+
 
         # Input projection for noisy dance features
         self.input_projection = nn.Linear(nfeats, latent_dim)
         
         # Time embedding (same as main model)
         self.time_embed = DiffTimeEmb(latent_dim)
+
+        # Control
+        
+        self.control_projection = nn.Linear(control_dim, latent_dim)
+        # self.control_encoder = nn.Identity()
+        self.control_encoder = nn.Sequential(
+            nn.Linear(latent_dim, latent_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(latent_dim, latent_dim),
+            nn.Dropout(dropout),
+        )
         
         # Encoder layers that mirror the decoder structure
         controlnet_layers = nn.ModuleList([])
@@ -465,7 +479,7 @@ class ControlNet(nn.Module):
     def forward(
         self, 
         x: Tensor, 
-        control_embed: Tensor, 
+        control: Tensor, 
         music_cond: Tensor, 
         times: Tensor, 
         music_drop_prob: float = 0.0,
@@ -474,7 +488,7 @@ class ControlNet(nn.Module):
         """
         Args:
             x: Noisy dance input [batch, frames, features]
-            control_embed: Control input embedding (e.g., pose) [batch, frames, latent_dim]
+            control: Control input (e.g., pose) [batch, frames, latent_dim]
             music_cond: Music conditioning [batch, frames, latent_dim]
             times: Timestep [batch]
             music_drop_prob: Dropout probability for music conditioning
@@ -493,8 +507,30 @@ class ControlNet(nn.Module):
         
         # Project and encode input dance features
 
+        batch_size, device = x.shape[0], x.device
+
         x = self.input_projection(x)
         x = self.abs_pos_encoding(x)
+        
+
+        # create control conditional embedding with conditional dropout
+        control_mask = prob_mask_like((batch_size,), 1 - control_drop_prob, device=device)
+        control_mask_embed = rearrange(control_mask, "b -> b 1 1")
+
+        # Project control input
+        control = self.control_projection(control)
+        control = self.abs_pos_encoding2(control)
+        control_embed = self.control_encoder(control)
+
+        # Residual
+        control_embed = control + control_embed
+
+        # # ! Try adding dropout to prevent over-reliance on original dance
+        # control_embed = self.control_dropout(control_embed)
+
+        null_control_embed = self.null_control_embed.to(control_embed.dtype)
+        control_embed = torch.where(control_mask_embed, control_embed, null_control_embed)
+
         
         # Add control to input
         x = x + control_embed
@@ -554,9 +590,8 @@ class Model(nn.Module):
         self.TimeEmbed = DiffTimeEmb(latent_dim)
         # null embeddings for guidance dropout
         self.null_music_embed = nn.Parameter(torch.randn(1, nframes, latent_dim))
-        # todo! see if initialize with randn or 0
-        self.null_control_embed = nn.Parameter(torch.randn(1, nframes, latent_dim))
-
+        # # todo! see if initialize with randn or 0
+        # self.null_control_embed = nn.Parameter(torch.randn(1, nframes, latent_dim))
 
         self.norm_music = nn.LayerNorm(latent_dim)
         # If there are requirements for GPU memory usage and training speed, it can be set to False.
@@ -566,9 +601,6 @@ class Model(nn.Module):
         self.input_projection = nn.Linear(nfeats, latent_dim)
         self.music_encoder = nn.Sequential()
 
-        # todo!
-        self.control_projection = nn.Linear(control_dim, latent_dim)
-        self.control_encoder = nn.Identity()
 
         for _ in range(2):
             self.music_encoder.append(
@@ -612,6 +644,7 @@ class Model(nn.Module):
             self.controlnet = ControlNet(
                 nfeats=nfeats,
                 control_dim=control_dim,
+                nframes=nframes,
                 latent_dim=latent_dim,
                 ff_dim=ff_dim,
                 num_layers=num_layers,
@@ -678,26 +711,12 @@ class Model(nn.Module):
 
         # Control
 
-        # create control conditional embedding with conditional dropout
-        control_mask = prob_mask_like((batch_size,), 1 - control_drop_prob, device=device)
-        control_mask_embed = rearrange(control_mask, "b -> b 1 1")
-
-        # Project control input
-        control_embed = self.control_projection(control)
-        control_embed = self.abs_pos_encoding(control_embed)
-        control_embed = self.control_encoder(control_embed)
-
-        # # ! Try adding dropout to prevent over-reliance on original dance
-        # control_embed = self.control_dropout(control_embed)
-
-        null_control_embed = self.null_control_embed.to(control_embed.dtype)
-        control_embed = torch.where(control_mask_embed, control_embed, null_control_embed)
-
+ 
 
         # Generate ControlNet features if enabled
         control_features = None
         if self.use_controlnet and control is not None:
-            control_features = self.controlnet(x, control_embed, music_tokens, times, music_drop_prob, control_drop_prob)
+            control_features = self.controlnet(x, control, music_tokens, times, music_drop_prob, control_drop_prob)
 
         # print("control features: ")
         # print(control_features)
