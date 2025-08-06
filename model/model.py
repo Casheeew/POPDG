@@ -496,29 +496,6 @@ class ControlNet(nn.Module):
         x = self.input_projection(x)
         x = self.abs_pos_encoding(x)
         
-<<<<<<< Updated upstream
-=======
-
-        # create control conditional embedding with conditional dropout
-        control_mask = prob_mask_like((batch_size,), 1 - control_drop_prob, device=device)
-        control_mask_embed = rearrange(control_mask, "b -> b 1 1")
-
-        # Project control input
-        control = self.control_projection(control)
-        control = self.abs_pos_encoding2(control)
-        control_embed = self.mlp_encoder(control)
-
-        # Residual
-        # control_embed = control + control_embed
-
-        # # ! Try adding dropout to prevent over-reliance on original dance
-        # control_embed = self.control_dropout(control_embed)
-
-        null_control_embed = self.null_control_embed.to(control_embed.dtype)
-        control_embed = torch.where(control_mask_embed, control_embed, null_control_embed)
-
-        
->>>>>>> Stashed changes
         # Add control to input
         x = x + control_embed
         
