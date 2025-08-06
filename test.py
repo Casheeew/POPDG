@@ -23,6 +23,7 @@ from dataset.quaternion import ax_to_6v
 
 from dataset.preprocess import Normalizer, vectorize_many
 
+random.seed(123)
 
 def process_dataset(root_pos, local_q, normalizer):
     # FK skeleton
@@ -246,7 +247,7 @@ def test(opt):
     for i in range(len(all_cond)):
         data_tuple = None, all_cond[i], all_motions[i], all_filenames[i]
         model.render_sample(
-            data_tuple, "test", opt.render_dir, render_count=-1, fk_out=fk_out, render=not opt.no_render
+            data_tuple, "test", opt.render_dir, render_count=-1, fk_out=fk_out, render=not opt.no_render, ref_fk_out='eval/reference_motions'
         )
     print("Done")
     torch.cuda.empty_cache()

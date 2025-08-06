@@ -22,6 +22,9 @@ test_renders
 
 /** Eval */
 eval/motions/**
+eval_data
+eval_data_ref
+eval/reference_motions/**
 
 /** Processed datasets */
 test
@@ -29,3 +32,7 @@ train
 shoki_house
 in_the_wild
 in_the_wild_j
+
+/** Cache */
+cached_features
+data/features

@@ -74,7 +74,7 @@ def calc_physical_score(dir):
         accelerations.append(foot_mins[:, 0].mean())
 
     out = np.mean(scores) * 10000
-    print(f"{dir} has a mean PFC of {out}")
+    print(f"{dir} has a mean PBC of {out}")
 
 
 def parse_eval_opt():

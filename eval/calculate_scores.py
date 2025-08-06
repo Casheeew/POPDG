@@ -4,6 +4,7 @@ import time
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 from scipy import linalg
+import argparse
 
 # See https://github.com/google/aistplusplus_api/ for installation 
 
@@ -144,6 +145,12 @@ def calculate_frechet_feature_distance(feature_list1, feature_list2):
     mean1 = np.sum(mean)
     std = np.std(feature_list1, axis=0) + 1e-10
     std1 = np.sum(std)
+
+    print("Means", mean, mean1)
+    print("Stds", std, std1)
+
+    print('isNaN', np.any(np.isnan(feature_list1)), np.any(np.isnan(feature_list2)))
+
     feature_list1 = (feature_list1 - mean) / std
     feature_list2 = (feature_list2 - mean) / std
 
@@ -156,6 +163,16 @@ def calculate_frechet_feature_distance(feature_list1, feature_list2):
     avg_dist = calculate_avg_distance(feature_list2)
     return frechet_dist, avg_dist, mean1, std1
 
+def parse_eval_opt():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--motion_path",
+        type=str,
+        default="eval/motions",
+        help="Where to load saved motions",
+    )
+    opt = parser.parse_args()
+    return opt
 
 if __name__ == "__main__":
     import glob
@@ -164,13 +181,15 @@ if __name__ == "__main__":
 
     # get cached motion features for the real data
     real_features = {
-        "kinetic": [np.load(f) for f in glob.glob("data/features/*_kinetic.npy")],
-        "manual": [np.load(f) for f in glob.glob("data/features/*_manual.npy")],
+        "kinetic": [np.load(f) for f in glob.glob("data/features/*/*_kinetic.npy")],
+        "manual": [np.load(f) for f in glob.glob("data/features/*/*_manual.npy")],
     }
+
+    opt = parse_eval_opt()
 
     # get motion features for the results
     result_features = {"kinetic": [], "manual": []}
-    result_files = glob.glob('eval/motions/*.pkl')
+    result_files = glob.glob(opt.motion_path + '/*.pkl')
     for result_file in tqdm.tqdm(result_files):
         with open(result_file, 'rb') as file:
             data = pickle.load(file)
@@ -184,6 +203,7 @@ if __name__ == "__main__":
     # FID metrics
     FID_k, Dist_k, mean1, std1 = calculate_frechet_feature_distance(
         real_features["kinetic"], result_features["kinetic"])
+    print('--' * 5)
     FID_g, Dist_g, mean2, std2 = calculate_frechet_feature_distance(
         real_features["manual"], result_features["manual"])
     

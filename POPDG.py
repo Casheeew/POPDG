@@ -405,7 +405,7 @@ class POPDG:
 
     # todo! add x_original as control
     def render_sample(
-        self, data_tuple, label, render_dir, render_count=-1, fk_out=None, render=True
+        self, data_tuple, label, render_dir, render_count=-1, fk_out=None, render=True, ref_fk_out=None,
     ):
         _, cond, motion, wavname = data_tuple
         # assert len(cond.shape) == 3
@@ -437,6 +437,6 @@ class POPDG:
             name=wavname[:render_count],
             sound=True,
             mode="long",
-            fk_out=fk_out,
+            fk_out=ref_fk_out,
             render=render
         )
