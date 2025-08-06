@@ -4,16 +4,20 @@ from glob import glob
 
 # Source and destination
 source_root = "data/test"
-destination_dir = "eval_data_ref"
+destination_dir = 'eval_data'
+
+# # Uncomment if reference data (simplified ground truth)
+# destination_dir = "eval_data_ref"
 
 # Ensure destination directory exists
 os.makedirs(destination_dir, exist_ok=True)
 
-# Change _original to _simplified for ref data
 
 # Define search patterns
 file_patterns = [
-    ("motions", "*_simplified.npy"),
+    # # Uncomment if reference data (simplified ground truth)
+    # ("motions", "*_simplified.npy"),
+    ("motions", "*_original.npy"),
     ("wavs", "*_original.wav"),
 ]
 
@@ -32,11 +36,11 @@ for subdir, pattern in file_patterns:
         filename = os.path.basename(filepath)
 
                 
-        # Remove if not ref data
+        # # Uncomment if reference data (simplified ground truth)
                 
-        # Modify filename for .wav files
-        if filename.endswith("_original.wav"):
-            filename = filename.replace("_original.wav", "_simplified.wav")
+        # # Modify filename for .wav files
+        # if filename.endswith("_original.wav"):
+        #     filename = filename.replace("_original.wav", "_simplified.wav")
 
 
         # Compose a unique filename: {strat}_{filename}
