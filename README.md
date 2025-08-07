@@ -20,7 +20,7 @@ By default, this processes the data into slices of length 5 with stride 0.5. If 
 
 ### Pre-trained checkpoints
 
-You can find our pre-trained checkpoints here:
+You can find our pre-trained checkpoints here: https://drive.google.com/drive/folders/1oE95mv4CgHRDbksL-he2ka1evD6iwUQd
 
 
 
@@ -63,7 +63,15 @@ python test.py --checkpoint <model checkpoint> --music_dir eval_data --render_di
 
 If you wish to see the generated results, remove the `--no_render` option.
 
-3. Evaluate the generated results
+3. Extract the kinematic and manual features of all dataset motions (only do it by once)：
+
+```bash
+python eval/extract_features.py
+```
+
+Note: remember to do it on both the train and test set.
+
+4. Evaluate the generated results
 
 Below are the commands to test PFC, PBC, DIV, FID and dance complexity scores, respectively.
 
