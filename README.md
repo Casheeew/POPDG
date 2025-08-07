@@ -18,9 +18,16 @@ python create_dataset.py --dataset_folder simplifie_dataset --extract-baseline -
 ```
 By default, this processes the data into slices of length 5 with stride 0.5. If you wish to change this, you can modify the parameters in `create_dataset.py`.
 
-4. Download the pre-trained `checkpoint.pt` from [POPDG](https://github.com/Luke-Luo1/POPDG) and put it at the top-level directory.
+### Pre-trained checkpoints
+
+You can find our pre-trained checkpoints here:
+
+
 
 ## Train the model
+1. Download the pre-trained `checkpoint.pt` from [POPDG](https://github.com/Luke-Luo1/POPDG) and put it at the top-level directory.
+
+2. Train the model:
 
 ```bash
 python train.py --batch_size 50 --epochs 2000 --exp_name <experiment name> --feature_type jukebox
@@ -37,6 +44,35 @@ Other flags and their usage can be found in `args.py`.
 > **_NOTE:_**  Whenever you make changes to the dataset or to `load_popdanceset.py`, be sure to run the commands with the --force_reload and --no_cache flags. Otherwise, the model will use the previously cached dataset instead of your updates.
 
 You can experiment with `guidance_weight` to see how it affects the simplification process.
+
+## Model Evaluation
+
+1. If you want to create evaluation data from the built test data, run the following:
+
+```bash
+python create_eval_data.py
+```
+
+To evaluate custom or in-the-wild data, add .npy motion files (in TRAM output format) and .wav music audio files in pairs (with the same name).
+
+2. Test the model's dance generation:
+
+```bash
+python test.py --checkpoint <model checkpoint> --music_dir eval_data --render_dir test_renders --save_motions --out_length=5 --motion_save_dir eval/motions --no_render
+```
+
+If you wish to see the generated results, remove the `--no_render` option.
+
+3. Evaluate the generated results
+
+Below are the commands to test PFC, PBC, DIV, FID and dance complexity scores, respectively.
+
+```bash
+python eval/eval_pfc.py --motion_path eval/motions
+python eval/eval_pbc.py --motion_path eval/motions
+python eval/calculate_scores.py --motion_path eval/motions
+python eval/calculate_simscore.py --motion_path eval/motions
+```
 
 
 ## Appendix
