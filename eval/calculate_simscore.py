@@ -23,7 +23,7 @@ def calc_physical_score(dir):
     # cube_dirs = [i for i in range(3)]
     # DT = 1 / 30
 
-    it = glob.glob(os.path.join(dir, "*_simplified.pkl"))
+    it = glob.glob(os.path.join(dir, "*_original.pkl"))
     if len(it) > 1000:
         it = random.sample(it, 1000)
     for pkl in tqdm(it):
